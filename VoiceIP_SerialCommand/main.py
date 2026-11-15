@@ -12,7 +12,7 @@ import argparse
 import signal
 import sys
 import time
-
+from serial_link import SerialLink
 import config
 from audio_input import (AudioInputError, MicrophoneStream, chunk_rms,
                          print_input_devices)
@@ -41,12 +41,13 @@ def spoken_list():
     return ", ".join(names[:-1]) + " or " + names[-1]
 
 
-def handle_command(command):
-    """Act on an accepted command. Currently: print it."""
+def handle_command(command, serial_link):
+    """Act on an accepted command."""
+
     print(f"Recognised command: {command.name}")
     print(f"Command ID: {command.command_id}")
     print(f"Configuration: {command.description}")
-    # FUTURE: serial_link.send(command.command_id)
+    serial_link.send_command(command.command_id)
 
 
 def run_mic_test(device, seconds=5):
@@ -64,7 +65,7 @@ def run_mic_test(device, seconds=5):
           "(roughly 800+). A flat 0 means the mic is muted/blocked.")
 
 
-def listen_loop(mic, recognizer, classifier, show_partial):
+def listen_loop(mic, recognizer, classifier, show_partial, serial_link):
     last_name, last_time = None, 0.0
     while True:
         chunk = mic.read(timeout=0.5)
@@ -95,7 +96,7 @@ def listen_loop(mic, recognizer, classifier, show_partial):
                 print(f"Repeated {cmd.name} ignored "
                       f"(within {config.REPEAT_COOLDOWN_SECONDS:g} s).")
             else:
-                handle_command(cmd)
+                handle_command(cmd, serial_link)
                 last_name, last_time = cmd.name, now
         print(f"\n{SEPARATOR}\n")
 
@@ -135,6 +136,11 @@ def main():
         print(f"Model error: {exc}")
         return 2
     print("Speech recognition initialised.")
+    serial_link = SerialLink(port="COM3", baudrate=9600)
+
+    if not serial_link.connect():
+        print("Could not connect to Arduino. Check the USB cable and COM port.")
+        return 4
 
     mic = MicrophoneStream(device=device)
     try:
@@ -147,8 +153,13 @@ def main():
 
     exit_code = 0
     try:
-        listen_loop(mic, recognizer, classifier,
-                    args.show_partial or config.SHOW_PARTIAL)
+        listen_loop(
+            mic,
+            recognizer,
+            classifier,
+            args.show_partial or config.SHOW_PARTIAL,
+            serial_link
+        )
     except KeyboardInterrupt:
         print("\nStopping...")
     except AudioInputError as exc:
@@ -156,6 +167,7 @@ def main():
         exit_code = 3
     finally:
         mic.stop()
+        serial_link.close()
         print("Shutdown complete.")
     return exit_code
 
